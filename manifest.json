@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Universal File Upload Interceptor",
+  "version": "1.0.0",
+  "description": "Intercepts file uploads to customize quality and compress files.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "offscreen",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "UpForge Dashboard"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["main-world.js", "wasm/*.wasm", "*.wasm"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

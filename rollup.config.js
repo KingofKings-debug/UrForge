@@ -3,7 +3,7 @@ import commonjs from '@rollup/plugin-commonjs';
 import copy from 'rollup-plugin-copy';
 
 export default [
-    // Output 1: Root directory (so loading C:\Users\ad999\Downloads\UpForge directly in Chrome works)
+    // Output 1: Root directory (so loading C:\Users\ad999\Downloads\urforge directly in Chrome works)
     {
         input: 'offscreen.js',
         output: {

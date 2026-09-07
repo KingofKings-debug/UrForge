@@ -8,15 +8,146 @@ script.onload = function () {
 };
 (document.head || document.documentElement).appendChild(script);
 
+// ─── Image Types & Broadening Helpers ─────────────────────────────────────────
+const IMAGE_EXTENSIONS = new Set([
+    'jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'bmp', 'tif', 'tiff',
+    'heic', 'heif', 'jfif', 'ico', 'pjpeg', 'pjp', 'svg'
+]);
+
+const BROADENED_IMAGE_ACCEPT = 'image/*,.jpg,.jpeg,.png,.webp,.avif,.gif,.bmp,.tif,.tiff,.heic,.heif,.jfif,.ico,image/jpeg,image/png,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/heic,image/heif';
+
+const EXT_TO_MIME = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', jfif: 'image/jpeg', pjpeg: 'image/jpeg', pjp: 'image/jpeg',
+    png: 'image/png', webp: 'image/webp', avif: 'image/avif', gif: 'image/gif',
+    bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff',
+    heic: 'image/heic', heif: 'image/heif', ico: 'image/x-icon', svg: 'image/svg+xml'
+};
+
+/**
+ * Determines whether an `accept` attribute string is strictly targeting images.
+ * Returns false if it contains non-image types (e.g. .pdf, application/pdf, .docx, 
+ */
+function isImageAcceptString(accept) {
+    if (!accept || typeof accept !== 'string') return false;
+    const trimmed = accept.trim();
+    if (!trimmed || trimmed === '*' || trimmed === '*/*') return false;
+
+    const tokens = trimmed.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (tokens.length === 0) return false;
+
+    for (const token of tokens) {
+        if (token.startsWith('image/')) continue;
+        if (token.startsWith('.')) {
+            const ext = token.slice(1);
+            if (IMAGE_EXTENSIONS.has(ext)) continue;
+            return false; // Non-image extension e.g. .pdf, .docx, .zip
+        }
+        return false; // Non-image MIME or token
+    }
+    return true;
+}
+
+/**
+ * Parses the original `accept` attribute to determine which output formats the destination website permits.
+ */
+function parseWebsiteAcceptedFormats(accept) {
+    const defaultAll = {
+        isRestricted: false,
+        formats: ['image/webp', 'image/avif', 'image/jpeg', 'image/png'],
+        displayNames: ['WebP', 'AVIF', 'JPEG', 'PNG']
+    };
+
+    if (!accept || typeof accept !== 'string') return defaultAll;
+    const trimmed = accept.trim();
+    if (!trimmed || trimmed === '*' || trimmed === '*/*') return defaultAll;
+
+    const tokens = trimmed.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (tokens.length === 0 || tokens.includes('image/*')) return defaultAll;
+
+    const directFormats = [];
+    const displayNames = [];
+
+    const hasJpeg = tokens.some(t => t === 'image/jpeg' || t === 'image/jpg' || t === 'image/pjpeg' || t === '.jpg' || t === '.jpeg' || t === '.jfif' || t === '.pjpeg' || t === '.pjp');
+    const hasPng = tokens.some(t => t === 'image/png' || t === 'image/x-png' || t === '.png');
+    const hasWebp = tokens.some(t => t === 'image/webp' || t === '.webp');
+    const hasAvif = tokens.some(t => t === 'image/avif' || t === '.avif');
+    const hasGif = tokens.some(t => t === 'image/gif' || t === '.gif');
+    const hasBmp = tokens.some(t => t === 'image/bmp' || t === '.bmp');
+
+    if (hasWebp) { directFormats.push('image/webp'); displayNames.push('WebP'); }
+    if (hasAvif) { directFormats.push('image/avif'); displayNames.push('AVIF'); }
+    if (hasJpeg) { directFormats.push('image/jpeg'); displayNames.push('JPEG'); }
+    if (hasPng) { directFormats.push('image/png'); displayNames.push('PNG'); }
+
+    if (directFormats.length === 0 && (hasGif || hasBmp)) {
+        directFormats.push('image/png', 'image/jpeg');
+        displayNames.push('PNG', 'JPEG');
+    }
+
+    if (directFormats.length === 0) {
+        return defaultAll;
+    }
+
+    return {
+        isRestricted: true,
+        formats: directFormats,
+        displayNames: displayNames,
+        tokens
+    };
+}
+
+const inputOriginalAcceptMap = new WeakMap();
+
+function getOriginalAccept(input) {
+    if (!input) return '';
+    if (inputOriginalAcceptMap.has(input)) {
+        return inputOriginalAcceptMap.get(input);
+    }
+    if (input.dataset && input.dataset.urforgeOrigAccept !== undefined) {
+        return input.dataset.urforgeOrigAccept;
+    }
+    return input.getAttribute('accept') || '';
+}
+
+function broadenFileInput(input) {
+    if (!input || input.type !== 'file') return;
+    const currentAccept = input.getAttribute('accept');
+    if (!currentAccept || currentAccept === BROADENED_IMAGE_ACCEPT) return;
+
+    if (isImageAcceptString(currentAccept)) {
+        inputOriginalAcceptMap.set(input, currentAccept);
+        if (input.dataset) {
+            input.dataset.urforgeOrigAccept = currentAccept;
+        }
+        input.setAttribute('accept', BROADENED_IMAGE_ACCEPT);
+        console.log('[urforge] Broadened accept for image input. Original:', currentAccept);
+    }
+}
+
 // 2. Setup Shadow DOM Modal
 // Global placeholders used by modal callbacks
 let originalFiles = [];
 let currentFile = null;
 let modalContainer, shadowRoot, overlay;
 let isDomainExcluded = false;
+let configuredEngine = 'wasm';
 
+try {
+    chrome.storage.sync.get(['defaultEngine'], (res) => {
+        if (res && res.defaultEngine) {
+            configuredEngine = res.defaultEngine;
+        }
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'sync' && changes.defaultEngine) {
+            configuredEngine = changes.defaultEngine.newValue || 'wasm';
+        }
+    });
+} catch (e) {
+    console.warn('[urforge] Storage sync listener initialization error:', e);
+}
 
-// Updated initModal with new UI components and event handling
+// Updated initModal with UI components and event handling
 function initModal() {
     if (modalContainer) return;
 
@@ -37,35 +168,36 @@ function initModal() {
     style.textContent = `
         :host {
             all: initial;
-            --bg-color: #09090b;
-            --surface-color: #18181b;
-            --surface-card: #27272a;
-            --primary-color: #6366f1;
-            --primary-hover: #4f46e5;
-            --accent-color: #818cf8;
-            --text-color: #f4f4f5;
-            --text-muted: #a1a1aa;
-            --border-color: #3f3f46;
-            --border-radius: 1rem;
-            --overlay-bg: rgba(0, 0, 0, 0.75);
-            --danger-color: #f43f5e;
-            --danger-hover: #e11d48;
-            --secondary-bg: #27272a;
-            --secondary-hover: #3f3f46;
+            --bg-color: #161618;
+            --surface-color: #1c1c1e;
+            --surface-card: #2c2c2e;
+            --surface-hover: #3a3a3c;
+            --primary-color: #0071e3;
+            --primary-hover: #0077ed;
+            --accent-color: #2997ff;
+            --text-color: #f5f5f7;
+            --text-muted: #86868b;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-radius: 14px;
+            --overlay-bg: rgba(0, 0, 0, 0.65);
+            --danger-color: #ff453a;
+            --secondary-bg: rgba(255, 255, 255, 0.08);
+            --secondary-hover: rgba(255, 255, 255, 0.12);
         }
         .overlay {
             position: fixed;
             inset: 0;
             background: var(--overlay-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             display: flex;
             align-items: center;
             justify-content: center;
             pointer-events: auto;
-            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            padding: 1rem;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+            padding: 1.25rem;
             box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
         }
         .modal {
             background: var(--surface-color);
@@ -74,10 +206,35 @@ function initModal() {
             max-width: 95vw;
             border-radius: var(--border-radius);
             overflow: hidden;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--border-color);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-color);
             display: flex;
             flex-direction: column;
             position: relative;
+            transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), max-width 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        
+        .modal.modal-pdf {
+            width: 960px;
+            max-width: 96vw;
+        }
+
+        .modal.modal-pdf .split-container {
+            min-height: 560px;
+            height: 75vh;
+            max-height: 750px;
+        }
+
+        .modal.modal-pdf .left-panel {
+            flex: 1.65;
+        }
+
+        .modal.modal-pdf .right-panel {
+            flex: 0.85;
+        }
+
+        .modal.modal-pdf .preview-box {
+            min-height: 440px;
+            height: 100%;
         }
         
         /* 2-Column Split View Layout */
@@ -105,31 +262,34 @@ function initModal() {
         .preview-box {
             flex: 1;
             min-height: 260px;
-            background: #000000;
-            border-radius: 0.75rem;
+            background: #0d0d0f;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
             position: relative;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
         }
         .preview-box img, .preview-box canvas {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
         }
+        .preview-box iframe, .preview-box embed, .preview-box object {
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 10px;
+        }
         .preview-fallback {
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.85rem;
             color: var(--text-muted);
             text-align: center;
-            padding: 1rem;
-        }
-        .preview-icon {
-            font-size: 3rem;
+            padding: 1.5rem;
         }
         .file-meta-card {
             display: flex;
@@ -137,7 +297,7 @@ function initModal() {
             justify-content: space-between;
             background: var(--surface-card);
             padding: 0.75rem 1rem;
-            border-radius: 0.625rem;
+            border-radius: 10px;
             border: 1px solid var(--border-color);
         }
         .file-info-main {
@@ -147,27 +307,29 @@ function initModal() {
             overflow: hidden;
         }
         .file-name-text {
-            font-weight: 600;
-            font-size: 0.9rem;
+            font-weight: 500;
+            font-size: 0.875rem;
             color: var(--text-color);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            letter-spacing: -0.01em;
         }
         .file-sub-text {
-            font-size: 0.78rem;
+            font-size: 0.75rem;
             color: var(--text-muted);
             display: flex;
             align-items: center;
             gap: 0.4rem;
         }
         .badge {
-            background: var(--primary-color);
-            color: #fff;
-            padding: 0.15rem 0.45rem;
-            border-radius: 0.25rem;
-            font-size: 0.7rem;
-            font-weight: 700;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            padding: 0.2rem 0.45rem;
+            border-radius: 5px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
             text-transform: uppercase;
         }
 
@@ -186,16 +348,20 @@ function initModal() {
             align-items: center;
             justify-content: space-between;
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 0.95rem;
+            letter-spacing: -0.01em;
             color: var(--text-color);
         }
         .close-btn {
             cursor: pointer;
-            font-size: 1.1rem;
             color: var(--text-muted);
-            transition: color 0.2s;
+            transition: color 0.15s ease;
             line-height: 1;
             padding: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
         }
         .close-btn:hover {
             color: var(--text-color);
@@ -204,53 +370,54 @@ function initModal() {
         .control-group {
             display: flex;
             flex-direction: column;
-            gap: 0.75rem;
+            gap: 0.5rem;
         }
         .control-label {
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             font-weight: 500;
             color: var(--text-muted);
             display: flex;
             justify-content: space-between;
+            align-items: center;
         }
         
+        .slider-container {
+            padding: 0.25rem 0;
+        }
         .slider-container input[type=range] {
             width: 100%;
             -webkit-appearance: none;
             appearance: none;
-            height: 6px;
-            background: var(--border-color);
-            border-radius: 3px;
+            height: 4px;
+            background: #38383a;
+            border-radius: 2px;
             outline: none;
             margin: 8px 0;
         }
         .slider-container input[type=range]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
             border-radius: 50%;
-            background: var(--primary-color);
+            background: #ffffff;
             cursor: pointer;
-            margin-top: -6px;
-            border: 2px solid #ffffff;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-            transition: transform 0.15 ease, background-color 0.15s ease;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+            transition: transform 0.15s ease;
         }
         .slider-container input[type=range]::-webkit-slider-thumb:hover {
             transform: scale(1.15);
-            background: var(--accent-color);
         }
         
         .size-stats-card {
-            background: var(--bg-color);
-            padding: 0.875rem 1rem;
-            border-radius: 0.625rem;
+            background: var(--surface-card);
+            padding: 0.75rem 0.9rem;
+            border-radius: 8px;
             border: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
-            gap: 0.4rem;
-            font-size: 0.825rem;
+            gap: 0.35rem;
+            font-size: 0.8rem;
         }
         .stat-row {
             display: flex;
@@ -259,75 +426,44 @@ function initModal() {
         }
         .stat-val-highlight {
             color: var(--accent-color);
-            font-weight: 600;
+            font-weight: 500;
         }
 
         .control-select {
             width: 100%;
-            background: var(--bg-color);
+            background: var(--surface-card);
             color: var(--text-color);
             border: 1px solid var(--border-color);
-            border-radius: 0.5rem;
+            border-radius: 8px;
             padding: 0.55rem 0.75rem;
-            font-size: 0.85rem;
+            font-size: 0.825rem;
             outline: none;
             cursor: pointer;
-            transition: border-color 0.2s;
+            transition: border-color 0.15s;
+            font-family: inherit;
         }
         .control-select:focus {
             border-color: var(--primary-color);
-        }
-        .engine-toggle {
-            display: flex;
-            background: var(--bg-color);
-            padding: 0.25rem;
-            border-radius: 0.6rem;
-            border: 1px solid var(--border-color);
-            gap: 0.25rem;
-        }
-        .engine-option {
-            flex: 1;
-            cursor: pointer;
-        }
-        .engine-option input {
-            display: none;
-        }
-        .engine-pill {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0.45rem 0.5rem;
-            border-radius: 0.45rem;
-            font-size: 0.775rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            transition: all 0.2s ease;
-            user-select: none;
-        }
-        .engine-option input:checked + .engine-pill {
-            background: var(--surface-card);
-            color: var(--accent-color);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
         }
 
         .action-stack {
             display: flex;
             flex-direction: column;
-            gap: 0.625rem;
+            gap: 0.5rem;
         }
         .btn {
-            padding: 0.65rem 1rem;
+            padding: 0.625rem 1rem;
             border: none;
-            border-radius: 0.5rem;
+            border-radius: 8px;
             cursor: pointer;
-            font-size: 0.85rem;
-            font-weight: 600;
-            transition: all 0.2s ease;
+            font-size: 0.825rem;
+            font-weight: 500;
+            font-family: inherit;
+            transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
             outline: none;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 0.5rem;
         }
         .btn-primary {
             background: var(--primary-color);
@@ -339,7 +475,6 @@ function initModal() {
         .btn-secondary {
             background: var(--secondary-bg);
             color: var(--text-color);
-            border: 1px solid var(--border-color);
         }
         .btn-secondary:hover {
             background: var(--secondary-hover);
@@ -347,12 +482,11 @@ function initModal() {
         .btn-danger {
             background: transparent;
             color: var(--danger-color);
-            border: 1px solid rgba(244, 63, 94, 0.4);
-            margin-top: 0.25rem;
+            font-size: 0.78rem;
+            padding: 0.4rem;
         }
         .btn-danger:hover {
-            background: rgba(244, 63, 94, 0.15);
-            border-color: var(--danger-color);
+            opacity: 0.8;
         }
 
         .hidden {
@@ -361,13 +495,12 @@ function initModal() {
         .manage-link {
             color: var(--text-muted);
             cursor: pointer;
-            font-size: 0.75rem;
-            text-decoration: underline;
+            font-size: 0.72rem;
             text-align: center;
-            transition: color 0.2s;
+            transition: color 0.15s;
         }
         .manage-link:hover {
-            color: var(--accent-color);
+            color: var(--text-color);
         }
 
         /* Exclusions View */
@@ -389,10 +522,10 @@ function initModal() {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: var(--bg-color);
+            background: var(--surface-card);
             padding: 0.6rem 0.85rem;
-            border-radius: 0.5rem;
-            font-size: 0.85rem;
+            border-radius: 8px;
+            font-size: 0.825rem;
             border: 1px solid var(--border-color);
         }
         .exclusion-domain {
@@ -407,14 +540,14 @@ function initModal() {
             color: var(--danger-color);
             border: none;
             cursor: pointer;
-            font-size: 0.8rem;
-            font-weight: 600;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.25rem;
-            transition: background-color 0.2s;
+            font-size: 0.78rem;
+            font-weight: 500;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            transition: opacity 0.15s;
         }
         .btn-remove-exclusion:hover {
-            background: rgba(244, 63, 94, 0.15);
+            opacity: 0.8;
         }
 
         /* Progress View */
@@ -423,60 +556,54 @@ function initModal() {
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 1.25rem;
+            gap: 1rem;
             padding: 3.5rem 2rem;
             min-height: 380px;
         }
-        .progress-icon {
-            width: 64px;
-            height: 64px;
+        .progress-spinner {
+            width: 36px;
+            height: 36px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: var(--primary-color);
             border-radius: 50%;
-            background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.75rem;
-            animation: pulse-ring 1.8s ease-in-out infinite;
-            box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6);
+            animation: spin 0.8s linear infinite;
         }
-        @keyframes pulse-ring {
-            0%   { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6); }
-            70%  { box-shadow: 0 0 0 14px rgba(99, 102, 241, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
         .progress-label {
-            font-size: 1rem;
-            font-weight: 600;
+            font-size: 0.95rem;
+            font-weight: 500;
             color: var(--text-color);
             text-align: center;
+            letter-spacing: -0.01em;
         }
         .progress-sub {
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             color: var(--text-muted);
             text-align: center;
-            margin-top: -0.75rem;
+            margin-top: -0.5rem;
         }
         .progress-track {
             width: 100%;
-            max-width: 400px;
-            height: 8px;
-            background: var(--bg-color);
+            max-width: 320px;
+            height: 4px;
+            background: #2c2c2e;
             border-radius: 99px;
             overflow: hidden;
-            border: 1px solid var(--border-color);
         }
         .progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+            background: var(--primary-color);
             border-radius: 99px;
             width: 0%;
             transition: width 0.3s ease;
         }
         .progress-pct {
-            font-size: 2.25rem;
-            font-weight: 700;
+            font-size: 2rem;
+            font-weight: 600;
             color: var(--text-color);
-            letter-spacing: -0.05em;
+            letter-spacing: -0.03em;
         }
     `;
     shadowRoot.appendChild(style);
@@ -509,72 +636,70 @@ function initModal() {
                     <div class="right-panel">
                         <div>
                             <div class="panel-header">
-                                <span>⚙️ Optimization Settings</span>
-                                <span class="close-btn" id="close-modal">✕</span>
+                                <span>Optimization</span>
+                                <span class="close-btn" id="close-modal">
+                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"></line><line x1="11" y1="1" x2="1" y2="11"></line></svg>
+                                </span>
                             </div>
                             
-                            <div class="control-group" style="margin-top: 1rem;">
-                                <div class="control-label">
-                                    <span>Output Format</span>
+                            <div id="image-controls">
+                                <div class="control-group" style="margin-top: 1rem;">
+                                    <div class="control-label" id="format-label-row">
+                                        <span>Output Format</span>
+                                        <span id="site-format-hint" style="font-size:0.75rem; color:var(--accent-color); font-weight:500;"></span>
+                                    </div>
+                                    <select id="format-select" class="control-select">
+                                        <option value="image/webp" selected>WebP (Recommended)</option>
+                                        <option value="image/avif">AVIF (Smallest)</option>
+                                        <option value="image/jpeg">JPEG (Universal)</option>
+                                        <option value="image/png">PNG</option>
+                                        <option value="auto">Same as Original</option>
+                                    </select>
                                 </div>
-                                <select id="format-select" class="control-select">
-                                    <option value="image/webp" selected>WebP (Recommended)</option>
-                                    <option value="image/avif">AVIF (Smallest)</option>
-                                    <option value="image/jpeg">JPEG (Universal)</option>
-                                    <option value="image/png">PNG (Lossless)</option>
-                                    <option value="auto">Same as Original</option>
-                                </select>
+
+                                <div class="control-group" id="quality-control-group" style="margin-top: 0.85rem; transition: opacity 0.2s ease;">
+                                    <div class="control-label">
+                                        <span>Quality Level</span>
+                                        <span id="range-label-left">75%</span>
+                                    </div>
+                                    <div class="slider-container">
+                                        <input type="range" id="quality-range" min="1" max="100" step="1" value="75">
+                                    </div>
+                                </div>
+
+                                <div class="size-stats-card" style="margin-top: 1rem;">
+                                    <div class="stat-row">
+                                        <span>Original</span>
+                                        <span id="stat-original-size">0 MB</span>
+                                    </div>
+                                    <div class="stat-row">
+                                        <span>Estimated</span>
+                                        <span class="stat-val-highlight" id="range-label-right">~0 MB</span>
+                                    </div>
+                                </div>
                             </div>
 
-                            <div class="control-group" style="margin-top: 0.85rem;">
-                                <div class="control-label">
-                                    <span>Compression Engine</span>
+                            <div id="non-image-notice" class="size-stats-card hidden" style="margin-top: 1.25rem;">
+                                <div class="stat-row" style="color: var(--text-color); font-weight: 500;">
+                                    <span>Document File</span>
                                 </div>
-                                <div class="engine-toggle">
-                                    <label class="engine-option">
-                                        <input type="radio" name="upforge-engine" value="wasm" checked>
-                                        <span class="engine-pill">⚡ Pro WASM</span>
-                                    </label>
-                                    <label class="engine-option">
-                                        <input type="radio" name="upforge-engine" value="canvas">
-                                        <span class="engine-pill">🖼️ Fast Canvas</span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="control-group" style="margin-top: 0.85rem;">
-                                <div class="control-label">
-                                    <span>Quality Level</span>
-                                    <span id="range-label-left">60%</span>
-                                </div>
-                                <div class="slider-container">
-                                    <input type="range" id="quality-range" min="10" max="90" step="5" value="60">
-                                </div>
-                            </div>
-
-                            <div class="size-stats-card" style="margin-top: 1rem;">
-                                <div class="stat-row">
-                                    <span>Original:</span>
-                                    <span id="stat-original-size">0 MB</span>
-                                </div>
-                                <div class="stat-row">
-                                    <span>Estimated:</span>
-                                    <span class="stat-val-highlight" id="range-label-right">~0 MB</span>
+                                <div style="color: var(--text-muted); font-size: 0.78rem; line-height: 1.4; margin-top: 0.25rem;">
+                                    This file format will be uploaded directly in its original format without conversion.
                                 </div>
                             </div>
                         </div>
 
                         <div class="action-stack">
                             <button class="btn btn-primary" id="btn-compress">
-                                ⚡ Compress & Upload
+                                Compress & Upload
                             </button>
                             <button class="btn btn-secondary" id="btn-keep">
-                                📄 Upload Original
+                                Upload Original
                             </button>
                             <button class="btn btn-danger" id="exclude-site">
-                                🚫 Never ask on this site
+                                Never ask on this site
                             </button>
-                            <span class="manage-link" id="btn-manage-exclusions">Manage Exclusions</span>
+                            <span class="manage-link" id="btn-manage-exclusions">Manage Excluded Sites</span>
                         </div>
                     </div>
                 </div>
@@ -584,7 +709,9 @@ function initModal() {
             <div id="exclusions-view" class="hidden">
                 <div class="panel-header">
                     <span>Excluded Sites</span>
-                    <span class="close-btn" id="btn-back-to-main">✕</span>
+                    <span class="close-btn" id="btn-back-to-main">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"></line><line x1="11" y1="1" x2="1" y2="11"></line></svg>
+                    </span>
                 </div>
                 <div id="exclusions-list-container">
                     <!-- Dynamic list of domains -->
@@ -593,7 +720,7 @@ function initModal() {
 
             <!-- Progress View -->
             <div id="progress-view" class="hidden">
-                <div class="progress-icon">⚡</div>
+                <div class="progress-spinner"></div>
                 <div class="progress-pct" id="progress-pct">0%</div>
                 <div class="progress-label" id="progress-label">Preparing...</div>
                 <div class="progress-sub" id="progress-sub">Please wait while we process your file.</div>
@@ -607,7 +734,7 @@ function initModal() {
 
     // Close button handler
     shadowRoot.getElementById('close-modal').onclick = () => {
-        console.log('[UpForge] Close button clicked.');
+        console.log('[urforge] Close button clicked.');
         overlay.classList.add('hidden');
         modalContainer.style.pointerEvents = 'none';
     };
@@ -660,7 +787,7 @@ function initModal() {
                     if (index > -1) {
                         domains.splice(index, 1);
                         chrome.storage.sync.set({ excludedDomains: domains }, () => {
-                            console.log('[UpForge] Removed domain from exclusions:', dom);
+                            console.log('[urforge] Removed domain from exclusions:', dom);
                             if (dom === window.location.hostname) {
                                 isDomainExcluded = false;
                             }
@@ -711,7 +838,7 @@ chrome.runtime.onMessage.addListener((msg) => {
             dataUrlToFile(msg.dataUrl, msg.fileName, msg.fileType)
                 .then(job.resolve)
                 .catch(err => {
-                    console.warn('[UpForge] Error converting COMPRESSION_COMPLETE dataUrl:', err);
+                    console.warn('[urforge] Error converting COMPRESSION_COMPLETE dataUrl:', err);
                     fallbackClientSideCompress(job.originalFile, job.quality, job.targetFormat).then(job.resolve);
                 });
         } else if (msg.fileData) {
@@ -736,7 +863,7 @@ chrome.runtime.onMessage.addListener((msg) => {
         }
     } else if (msg.type === 'COMPRESSION_ERROR') {
         _compressionJobs.delete(msg.requestId);
-        console.warn('[UpForge] Offscreen compression error:', msg.error);
+        console.warn('[urforge] Offscreen compression error:', msg.error);
         fallbackClientSideCompress(job.originalFile, job.quality, job.targetFormat).then(job.resolve);
     }
 });
@@ -747,12 +874,12 @@ function isImageFile(file) {
         return file.type !== 'image/svg+xml';
     }
     const ext = (file.name ? file.name.split('.').pop() : '').toLowerCase();
-    return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'jfif'].includes(ext);
+    return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'jfif', 'avif', 'heic', 'heif', 'tiff', 'tif', 'ico', 'pjpeg', 'pjp'].includes(ext);
 }
 
 async function fallbackClientSideCompress(file, quality, targetFormat) {
     try {
-        console.log('[UpForge] Using client-side canvas fallback compression...');
+        console.log('[urforge] Using client-side canvas fallback compression...');
         const bitmap = await createImageBitmap(file);
         let width = bitmap.width;
         let height = bitmap.height;
@@ -775,8 +902,22 @@ async function fallbackClientSideCompress(file, quality, targetFormat) {
         bitmap.close();
 
         let type = (targetFormat && targetFormat !== 'auto') ? targetFormat : (file.type || 'image/jpeg');
-        if (type === 'image/png' && (!targetFormat || targetFormat === 'auto')) {
-            type = 'image/jpeg';
+
+        if (type === 'image/png' && quality < 0.98) {
+            const imgData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+            const data = imgData.data;
+            const len = data.length;
+            const levels = Math.max(4, Math.min(256, Math.round(256 * Math.pow(quality, 0.75))));
+            const step = 255 / (levels - 1);
+            for (let i = 0; i < len; i += 4) {
+                data[i] = Math.round(Math.round(data[i] / step) * step);
+                data[i + 1] = Math.round(Math.round(data[i + 1] / step) * step);
+                data[i + 2] = Math.round(Math.round(data[i + 2] / step) * step);
+                if (data[i + 3] < 255 && data[i + 3] > 0) {
+                    data[i + 3] = Math.round(Math.round(data[i + 3] / step) * step);
+                }
+            }
+            ctx.putImageData(imgData, 0, 0);
         }
 
         const blob = await new Promise(resolve => canvas.toBlob(resolve, type, quality));
@@ -798,7 +939,7 @@ async function fallbackClientSideCompress(file, quality, targetFormat) {
 
         return new File([blob], outName, { type: type, lastModified: Date.now() });
     } catch (e) {
-        console.error('[UpForge] Client fallback error:', e);
+        console.error('[urforge] Client fallback error:', e);
         return file;
     }
 }
@@ -809,11 +950,11 @@ async function fallbackClientSideCompress(file, quality, targetFormat) {
  */
 async function compressViaOffscreen(file, quality, targetFormat, engine, onProgress) {
     if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
-        console.warn('[UpForge] Extension context invalidated. Using client fallback compression.');
+        console.warn('[urforge] Extension context invalidated. Using client fallback compression.');
         return fallbackClientSideCompress(file, quality, targetFormat);
     }
 
-    const requestId = `upforge-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const requestId = `urforge-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let fileData;
     try {
         fileData = await fileToDataUrl(file);
@@ -824,8 +965,7 @@ async function compressViaOffscreen(file, quality, targetFormat, engine, onProgr
     let fileType = file.type;
     if (!fileType || fileType.trim() === '') {
         const ext = (file.name ? file.name.split('.').pop() : '').toLowerCase();
-        const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp' };
-        fileType = mimeMap[ext] || 'image/jpeg';
+        fileType = EXT_TO_MIME[ext] || 'image/jpeg';
     }
 
     return new Promise((resolve) => {
@@ -854,13 +994,13 @@ async function compressViaOffscreen(file, quality, targetFormat, engine, onProgr
             }, (ack) => {
                 if (chrome.runtime?.lastError) {
                     _compressionJobs.delete(requestId);
-                    console.warn('[UpForge] Background unreachable:', chrome.runtime.lastError.message);
+                    console.warn('[urforge] Background unreachable:', chrome.runtime.lastError.message);
                     fallbackClientSideCompress(file, quality, targetFormat).then(resolve);
                 }
             });
         } catch (err) {
             _compressionJobs.delete(requestId);
-            console.warn('[UpForge] sendMessage context invalidated error:', err.message);
+            console.warn('[urforge] sendMessage context invalidated error:', err.message);
             fallbackClientSideCompress(file, quality, targetFormat).then(resolve);
         }
 
@@ -868,19 +1008,19 @@ async function compressViaOffscreen(file, quality, targetFormat, engine, onProgr
         setTimeout(() => {
             if (_compressionJobs.has(requestId)) {
                 _compressionJobs.delete(requestId);
-                console.warn('[UpForge] Compression timed out, using client fallback.');
+                console.warn('[urforge] Compression timed out, using client fallback.');
                 fallbackClientSideCompress(file, quality, targetFormat).then(resolve);
             }
         }, 60_000);
     });
 }
 
-// Updated handleFiles to use the new modal UI
-function handleFiles(files, callback) {
-    console.log('[UpForge] handleFiles called. Files count:', files.length, 'isDomainExcluded:', isDomainExcluded);
+// Updated handleFiles to use the new modal UI with website format restrictions
+function handleFiles(files, callback, sourceInput) {
+    console.log('[urforge] handleFiles called. Files count:', files.length, 'isDomainExcluded:', isDomainExcluded);
     // Do not process if domain excluded or no files
     if (isDomainExcluded || files.length === 0) {
-        console.log('[UpForge] Bypassing modal interception (excluded domain or no files).');
+        console.log('[urforge] Bypassing modal interception (excluded domain or no files).');
         return callback(files);
     }
 
@@ -890,6 +1030,10 @@ function handleFiles(files, callback) {
     // Save references for modal callbacks
     originalFiles = files;
     currentFile = files[0];
+
+    // Determine website accepted formats from source input
+    const origAccept = sourceInput ? getOriginalAccept(sourceInput) : '';
+    const restrictionInfo = parseWebsiteAcceptedFormats(origAccept);
 
     // Populate header & metadata card
     shadowRoot.getElementById('file-name').textContent = currentFile.name;
@@ -911,38 +1055,176 @@ function handleFiles(files, callback) {
         statOriginalEl.textContent = formattedSize;
     }
 
-    // Render preview
+    // Render preview & configure controls based on file type
     const preview = shadowRoot.getElementById('preview-area');
     preview.innerHTML = '';
+    const isCurrentImage = isImageFile(currentFile);
+
+    const imageControlsEl = shadowRoot.getElementById('image-controls');
+    const nonImageNoticeEl = shadowRoot.getElementById('non-image-notice');
+    const btnCompressEl = shadowRoot.getElementById('btn-compress');
+    const btnKeepEl = shadowRoot.getElementById('btn-keep');
+    const modalEl = shadowRoot.getElementById('upload-modal');
+
+    const isPdf = currentFile.type === 'application/pdf' || ext.toLowerCase() === 'pdf';
+    if (modalEl) {
+        if (isPdf) {
+            modalEl.classList.add('modal-pdf');
+        } else {
+            modalEl.classList.remove('modal-pdf');
+        }
+    }
+
+    if (!isCurrentImage) {
+        // Non-image file (PDF, XLSX, etc.): hide all compression and format controls
+        if (imageControlsEl) imageControlsEl.classList.add('hidden');
+        if (nonImageNoticeEl) nonImageNoticeEl.classList.remove('hidden');
+        if (btnCompressEl) btnCompressEl.classList.add('hidden');
+        if (btnKeepEl) {
+            btnKeepEl.classList.remove('hidden');
+            btnKeepEl.className = 'btn btn-primary';
+            btnKeepEl.textContent = 'Upload Original File';
+        }
+    } else {
+        // Image file: show optimization controls and action buttons
+        if (imageControlsEl) imageControlsEl.classList.remove('hidden');
+        if (nonImageNoticeEl) nonImageNoticeEl.classList.add('hidden');
+        if (btnCompressEl) {
+            btnCompressEl.classList.remove('hidden');
+            btnCompressEl.className = 'btn btn-primary';
+            btnCompressEl.textContent = 'Compress & Upload';
+        }
+        if (btnKeepEl) {
+            btnKeepEl.classList.remove('hidden');
+            btnKeepEl.className = 'btn btn-secondary';
+            btnKeepEl.textContent = 'Upload Original';
+        }
+    }
+
     if (currentFile.type.startsWith('image/') && ext.toLowerCase() !== 'svg') {
         const url = URL.createObjectURL(currentFile);
         const img = document.createElement('img');
         img.src = url;
         img.onload = () => URL.revokeObjectURL(url);
         preview.appendChild(img);
+    } else if (currentFile.type === 'application/pdf' || ext.toLowerCase() === 'pdf') {
+        const pdfBlob = currentFile.type === 'application/pdf' ? currentFile : new Blob([currentFile], { type: 'application/pdf' });
+        const url = URL.createObjectURL(pdfBlob);
+        
+        const iframe = document.createElement('iframe');
+        iframe.src = `${url}#toolbar=0&navpanes=0&view=FitH`;
+        iframe.title = currentFile.name || 'PDF Preview';
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+        iframe.style.borderRadius = '10px';
+        iframe.style.backgroundColor = '#161618';
+        
+        preview.appendChild(iframe);
     } else {
         const div = document.createElement('div');
         div.className = 'preview-fallback';
         div.innerHTML = `
-            <div class="preview-icon">📄</div>
-            <div style="font-weight: 600; color: var(--text-color);">${currentFile.name}</div>
-            <div style="font-size: 0.8rem; color: var(--text-muted);">${formattedSize}</div>
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#86868b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+            <div style="font-weight: 500; color: var(--text-color); font-size: 0.9rem;">${currentFile.name}</div>
+            <div style="font-size: 0.78rem; color: var(--text-muted);">${formattedSize}</div>
         `;
         preview.appendChild(div);
     }
 
+    // Configure Format Dropdown according to site restrictions
+    const formatSelect = shadowRoot.getElementById('format-select');
+    const siteHintEl = shadowRoot.getElementById('site-format-hint');
+    formatSelect.innerHTML = '';
+
+    const formatNameMap = {
+        'image/webp': 'WebP (Recommended)',
+        'image/avif': 'AVIF (Smallest)',
+        'image/jpeg': 'JPEG (Universal)',
+        'image/png': 'PNG (Optimized)',
+        'image/png-lossless': 'PNG (Lossless)'
+    };
+
+    if (restrictionInfo.isRestricted) {
+        if (siteHintEl) {
+            siteHintEl.textContent = `Site requires: ${restrictionInfo.displayNames.join(', ')}`;
+        }
+        restrictionInfo.formats.forEach(fmt => {
+            if (fmt === 'image/png') {
+                const opt1 = document.createElement('option');
+                opt1.value = 'image/png';
+                opt1.textContent = 'PNG (Optimized)';
+                formatSelect.appendChild(opt1);
+
+                const opt2 = document.createElement('option');
+                opt2.value = 'image/png-lossless';
+                opt2.textContent = 'PNG (Lossless)';
+                formatSelect.appendChild(opt2);
+            } else {
+                const opt = document.createElement('option');
+                opt.value = fmt;
+                opt.textContent = formatNameMap[fmt] || fmt.split('/')[1].toUpperCase();
+                formatSelect.appendChild(opt);
+            }
+        });
+
+        // Smart default: if original extension is PNG and PNG is allowed, use PNG; else if WebP allowed -> WebP; else JPEG; else first allowed
+        const origExt = (currentFile.name.split('.').pop() || '').toLowerCase();
+        if (origExt === 'png' && restrictionInfo.formats.includes('image/png')) {
+            formatSelect.value = 'image/png';
+        } else if (restrictionInfo.formats.includes('image/webp')) {
+            formatSelect.value = 'image/webp';
+        } else if (restrictionInfo.formats.includes('image/jpeg')) {
+            formatSelect.value = 'image/jpeg';
+        } else if (restrictionInfo.formats.length > 0) {
+            formatSelect.value = restrictionInfo.formats[0];
+        }
+    } else {
+        if (siteHintEl) siteHintEl.textContent = '';
+        formatSelect.innerHTML = `
+            <option value="image/webp" selected>WebP (Recommended)</option>
+            <option value="image/avif">AVIF (Smallest)</option>
+            <option value="image/jpeg">JPEG (Universal)</option>
+            <option value="image/png">PNG (Optimized)</option>
+            <option value="image/png-lossless">PNG (Lossless)</option>
+            <option value="auto">Same as Original</option>
+        `;
+    }
+
     // Quality slider & Format & Engine estimation
     const range = shadowRoot.getElementById('quality-range');
-    const formatSelect = shadowRoot.getElementById('format-select');
     const leftLabel = shadowRoot.getElementById('range-label-left');
     const rightLabel = shadowRoot.getElementById('range-label-right');
     
     function updateEstimation() {
         const quality = parseInt(range.value, 10) / 100;
-        if (leftLabel) leftLabel.textContent = `${range.value}%`;
-        
         const targetFormat = formatSelect ? formatSelect.value : 'image/webp';
-        const engineVal = shadowRoot.querySelector('input[name="upforge-engine"]:checked')?.value || 'wasm';
+        const engineName = configuredEngine === 'wasm' ? 'WASM' : 'Canvas';
+        const qualityGroup = shadowRoot.getElementById('quality-control-group');
+
+        const isLossless = (targetFormat === 'image/png-lossless');
+
+        if (isLossless) {
+            range.disabled = true;
+            if (qualityGroup) {
+                qualityGroup.style.opacity = '0.35';
+                qualityGroup.style.pointerEvents = 'none';
+            }
+            if (leftLabel) leftLabel.textContent = 'Lossless (Fixed)';
+        } else {
+            range.disabled = false;
+            if (qualityGroup) {
+                qualityGroup.style.opacity = '1';
+                qualityGroup.style.pointerEvents = 'auto';
+            }
+            if (leftLabel) leftLabel.textContent = `${range.value}%`;
+        }
 
         let formatMultiplier = quality * 0.65;
         let formatName = 'WebP';
@@ -954,8 +1236,11 @@ function handleFiles(files, callback) {
             formatMultiplier = quality * 0.45;
             formatName = 'AVIF';
         } else if (targetFormat === 'image/png') {
-            formatMultiplier = 0.75;
+            formatMultiplier = 0.35 + (quality * 0.55);
             formatName = 'PNG';
+        } else if (targetFormat === 'image/png-lossless') {
+            formatMultiplier = 0.85;
+            formatName = 'PNG Lossless';
         } else if (targetFormat === 'auto') {
             formatName = (currentFile.type ? currentFile.type.split('/')[1] : ext).toUpperCase();
         }
@@ -966,53 +1251,90 @@ function handleFiles(files, callback) {
         const formattedEst = estimatedBytes >= 1024 * 1024 ? `~${estMB} MB` : `~${estKB} KB`;
         const pctSaved = Math.max(0, Math.round((1 - (estimatedBytes / currentFile.size)) * 100));
 
-        const engineName = engineVal === 'wasm' ? 'WASM' : 'Canvas';
-
         if (rightLabel) {
             rightLabel.textContent = `${formattedEst} (${formatName} • ${engineName} • ${pctSaved}% saved)`;
         }
     }
     range.addEventListener('input', updateEstimation);
     if (formatSelect) formatSelect.addEventListener('change', updateEstimation);
-    shadowRoot.querySelectorAll('input[name="upforge-engine"]').forEach(radio => {
-        radio.addEventListener('change', updateEstimation);
-    });
     updateEstimation();
 
     // Button actions
-    shadowRoot.getElementById('btn-keep').onclick = () => {
-        console.log('[UpForge] Keep Original clicked.');
+    shadowRoot.getElementById('btn-keep').onclick = async () => {
+        console.log('[urforge] Keep Original clicked.');
         overlay.classList.add('hidden');
         modalContainer.style.pointerEvents = 'none';
-        callback(originalFiles);
+
+        // If the site restricts formats, ensure that incompatible formats (e.g. WebP/HEIC selected for JPEG-only site)
+        // are converted to the site's required format so the upload succeeds.
+        if (restrictionInfo.isRestricted && restrictionInfo.formats.length > 0) {
+            const fallbackTargetFormat = restrictionInfo.formats[0];
+            const processedFiles = [];
+            for (const file of originalFiles) {
+                const isImage = isImageFile(file);
+                const fileExt = (file.name ? file.name.split('.').pop() : '').toLowerCase();
+                const fileMime = file.type || EXT_TO_MIME[fileExt] || '';
+                const isAccepted = restrictionInfo.formats.includes(fileMime);
+
+                if (!isImage || isAccepted) {
+                    processedFiles.push(file);
+                } else {
+                    try {
+                        const converted = await compressViaOffscreen(file, 0.95, fallbackTargetFormat, 'wasm');
+                        processedFiles.push(converted || file);
+                    } catch (err) {
+                        console.warn('[urforge] Error converting original file to site format:', err);
+                        processedFiles.push(file);
+                    }
+                }
+            }
+            callback(processedFiles);
+        } else {
+            callback(originalFiles);
+        }
     };
+
     shadowRoot.getElementById('exclude-site').onclick = () => {
-        console.log('[UpForge] Exclude site clicked.');
+        console.log('[urforge] Exclude site clicked.');
         try {
             chrome.storage.sync.get(['excludedDomains'], (res) => {
                 const doms = (res && res.excludedDomains) || [];
                 if (!doms.includes(window.location.hostname)) {
                     doms.push(window.location.hostname);
                     chrome.storage.sync.set({ excludedDomains: doms }, () => {
-                        console.log('[UpForge] Successfully excluded current domain:', window.location.hostname);
-                        console.log('[UpForge] To reset, run in console: chrome.storage.sync.set({ excludedDomains: [] })');
+                        console.log('[urforge] Successfully excluded current domain:', window.location.hostname);
+                        console.log('[urforge] To reset, run in console: chrome.storage.sync.set({ excludedDomains: [] })');
                     });
                     isDomainExcluded = true;
                 }
             });
         } catch (err) {
-            console.error('[UpForge] Error during domain exclusion:', err);
+            console.error('[urforge] Error during domain exclusion:', err);
         }
         overlay.classList.add('hidden');
         modalContainer.style.pointerEvents = 'none';
         callback(originalFiles);
     };
+
     // Compress button — driven by real ImageCompressor.js progress events
     shadowRoot.getElementById('btn-compress').onclick = async () => {
-        console.log('[UpForge] Compress & Upload clicked.');
-        const quality = parseInt(range.value, 10) / 100;
-        const targetFormat = formatSelect ? formatSelect.value : 'image/webp';
-        const selectedEngine = shadowRoot.querySelector('input[name="upforge-engine"]:checked')?.value || 'wasm';
+        console.log('[urforge] Compress & Upload clicked.');
+        let quality = parseInt(range.value, 10) / 100;
+        let targetFormat = formatSelect ? formatSelect.value : 'image/webp';
+        const selectedEngine = configuredEngine || 'wasm';
+
+        if (targetFormat === 'image/png-lossless') {
+            targetFormat = 'image/png';
+            quality = 1.0;
+        }
+
+        if (targetFormat === 'auto') {
+            if (restrictionInfo.isRestricted && restrictionInfo.formats.length > 0) {
+                targetFormat = restrictionInfo.formats[0];
+            } else {
+                targetFormat = currentFile.type || 'image/webp';
+            }
+        }
 
         // ── Switch to progress view ──────────────────────────────────────────
         const mainView     = shadowRoot.getElementById('main-view');
@@ -1077,12 +1399,12 @@ function handleFiles(files, callback) {
                     setProgress(overall, label, sub);
                 });
             } catch (err) {
-                console.error('[UpForge] Compression failed, falling back to original:', err);
+                console.error('[urforge] Compression failed, falling back to original:', err);
                 compressed = file;
             }
 
             if (!compressed || !(compressed instanceof File)) {
-                console.warn('[UpForge] Result is not a valid File, falling back to original file:', compressed);
+                console.warn('[urforge] Result is not a valid File, falling back to original file:', compressed);
                 compressed = file;
             }
 
@@ -1109,7 +1431,7 @@ function handleFiles(files, callback) {
     };
 
     // Show modal and activate click events on the container
-    console.log('[UpForge] Displaying modal.');
+    console.log('[urforge] Displaying modal.');
     overlay.classList.remove('hidden');
     modalContainer.style.pointerEvents = 'auto';
 }
@@ -1118,48 +1440,155 @@ function handleFiles(files, callback) {
 try {
     chrome.storage.sync.get(['excludedDomains'], (result) => {
         const domains = (result && result.excludedDomains) || [];
-        console.log('[UpForge] Excluded domains list:', domains);
+        console.log('[urforge] Excluded domains list:', domains);
         if (domains.includes(window.location.hostname)) {
             isDomainExcluded = true;
-            console.log('[UpForge] Current domain is excluded from interception.');
+            console.log('[urforge] Current domain is excluded from interception.');
         }
     });
 } catch (err) {
-    console.error('[UpForge] Failed to run domain exclusion check:', err);
+    console.error('[urforge] Failed to run domain exclusion check:', err);
 }
 
-// Example interception for file inputs
-document.addEventListener('change', (e) => {
-    if (e.target && e.target.type === 'file' && !e.__extensionProcessed) {
-        if (e.target.files && e.target.files.length > 0) {
-            console.log('[UpForge] Change event intercepted on file input:', e.target);
-            e.preventDefault();
-            e.stopImmediatePropagation();
+// ─── Input Interception & Broadening Lifecycle ────────────────────────────────
+function handleFileInputChangeEvent(e) {
+    const input = e.target;
+    if (!input || input.type !== 'file' || e.__extensionProcessed) return;
+    if (!input.files || input.files.length === 0) return;
 
-            const originalFiles = Array.from(e.target.files);
-            handleFiles(originalFiles, (newFiles) => {
-                try {
-                    const dt = new DataTransfer();
-                    (newFiles || []).forEach(f => {
-                        if (f && f instanceof File) {
-                            dt.items.add(f);
-                        } else if (f && f instanceof Blob) {
-                            dt.items.add(new File([f], f.name || 'file', { type: f.type || 'application/octet-stream' }));
-                        } else {
-                            console.warn('[UpForge] Skipping non-File item in DataTransfer:', f);
-                        }
-                    });
-                    e.target.files = dt.files;
-                } catch (dtErr) {
-                    console.error('[UpForge] DataTransfer assignment error:', dtErr);
+    console.log('[urforge] Change event intercepted on file input:', input);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
+    const selectedFiles = Array.from(input.files);
+    handleFiles(selectedFiles, (newFiles) => {
+        try {
+            const dt = new DataTransfer();
+            (newFiles || []).forEach(f => {
+                if (f && f instanceof File) {
+                    dt.items.add(f);
+                } else if (f && f instanceof Blob) {
+                    dt.items.add(new File([f], f.name || 'file', { type: f.type || 'application/octet-stream' }));
+                } else {
+                    console.warn('[urforge] Skipping non-File item in DataTransfer:', f);
                 }
-
-                // Re-dispatch event
-                const newEvent = new Event('change', { bubbles: true });
-                newEvent.__extensionProcessed = true;
-                e.target.dispatchEvent(newEvent);
-                console.log('[UpForge] Re-dispatched processed change event.');
             });
+            input.files = dt.files;
+        } catch (dtErr) {
+            console.error('[urforge] DataTransfer assignment error:', dtErr);
+        }
+
+        // Re-dispatch event
+        const newEvent = new Event('change', { bubbles: true });
+        newEvent.__extensionProcessed = true;
+        input.dispatchEvent(newEvent);
+        console.log('[urforge] Re-dispatched processed change event.');
+    }, input);
+}
+
+function attachInput(input) {
+    if (!input || input.__urforgeAttached) return;
+    input.__urforgeAttached = true;
+    broadenFileInput(input);
+
+    input.addEventListener('change', handleFileInputChangeEvent, true);
+}
+
+// Hook prototype click/showPicker in content script context as well
+const originalInputClick = HTMLInputElement.prototype.click;
+HTMLInputElement.prototype.click = function() {
+    if (this.type === 'file') {
+        attachInput(this);
+        broadenFileInput(this);
+    }
+    return originalInputClick.apply(this, arguments);
+};
+
+if (HTMLInputElement.prototype.showPicker) {
+    const originalInputShowPicker = HTMLInputElement.prototype.showPicker;
+    HTMLInputElement.prototype.showPicker = function() {
+        if (this.type === 'file') {
+            attachInput(this);
+            broadenFileInput(this);
+        }
+        return originalInputShowPicker.apply(this, arguments);
+    };
+}
+
+// Find file input related to clicked labels or elements
+function findRelatedFileInput(target) {
+    if (!target) return null;
+    if (target.tagName === 'INPUT' && target.type === 'file') return target;
+    const label = target.closest ? target.closest('label') : null;
+    if (label) {
+        if (label.htmlFor) {
+            const el = document.getElementById(label.htmlFor);
+            if (el && el.tagName === 'INPUT' && el.type === 'file') return el;
+        }
+        const nestedInput = label.querySelector('input[type="file"]');
+        if (nestedInput) return nestedInput;
+    }
+    return null;
+}
+
+['pointerdown', 'mousedown', 'click', 'focusin'].forEach(evtName => {
+    document.addEventListener(evtName, (e) => {
+        const fileInput = findRelatedFileInput(e.target);
+        if (fileInput) {
+            attachInput(fileInput);
+            broadenFileInput(fileInput);
+        }
+    }, true);
+});
+
+// Observe existing inputs and dynamic DOM mutations (React, Vue, Angular, etc.)
+function scanAndAttachInputs() {
+    document.querySelectorAll('input[type="file"]').forEach(attachInput);
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', scanAndAttachInputs);
+} else {
+    scanAndAttachInputs();
+}
+
+const domObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+        if (m.type === 'childList') {
+            for (const node of m.addedNodes) {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    if (node.tagName === 'INPUT' && node.type === 'file') {
+                        attachInput(node);
+                    } else if (node.querySelectorAll) {
+                        node.querySelectorAll('input[type="file"]').forEach(attachInput);
+                    }
+                }
+            }
+        } else if (m.type === 'attributes' && m.attributeName === 'accept') {
+            if (m.target && m.target.tagName === 'INPUT' && m.target.type === 'file') {
+                const newAccept = m.target.getAttribute('accept');
+                if (newAccept && newAccept !== BROADENED_IMAGE_ACCEPT) {
+                    if (isImageAcceptString(newAccept)) {
+                        inputOriginalAcceptMap.set(m.target, newAccept);
+                        if (m.target.dataset) m.target.dataset.urforgeOrigAccept = newAccept;
+                        m.target.setAttribute('accept', BROADENED_IMAGE_ACCEPT);
+                    } else {
+                        inputOriginalAcceptMap.delete(m.target);
+                        if (m.target.dataset) delete m.target.dataset.urforgeOrigAccept;
+                    }
+                }
+            }
         }
     }
-}, true); // Use capture phase
+});
+
+if (document.documentElement) {
+    domObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['accept']
+    });
+}
+
+// Global change event capture fallback
+document.addEventListener('change', handleFileInputChangeEvent, true);

@@ -644,6 +644,24 @@ async function encode(data, options = {}) {
     return output.buffer;
 }
 
+function applyPngQuantization$1(imageData, quality) {
+    if (quality >= 98) return imageData;
+    const data = imageData.data;
+    const len = data.length;
+    const levels = Math.max(4, Math.min(256, Math.round(256 * Math.pow(quality / 100, 0.75))));
+    const step = 255 / (levels - 1);
+    const quantizedData = new Uint8ClampedArray(data);
+    for (let i = 0; i < len; i += 4) {
+        quantizedData[i] = Math.round(Math.round(quantizedData[i] / step) * step);
+        quantizedData[i + 1] = Math.round(Math.round(quantizedData[i + 1] / step) * step);
+        quantizedData[i + 2] = Math.round(Math.round(quantizedData[i + 2] / step) * step);
+        if (quantizedData[i + 3] < 255 && quantizedData[i + 3] > 0) {
+            quantizedData[i + 3] = Math.round(Math.round(quantizedData[i + 3] / step) * step);
+        }
+    }
+    return new ImageData(quantizedData, imageData.width, imageData.height);
+}
+
 class WasmImageCompressor extends BaseCompressor {
     canHandle(file) {
         if (!file) return false;
@@ -651,7 +669,7 @@ class WasmImageCompressor extends BaseCompressor {
             return file.type !== 'image/svg+xml';
         }
         const ext = (file.name ? file.name.split('.').pop() : '').toLowerCase();
-        return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'jfif', 'avif'].includes(ext);
+        return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'jfif', 'avif', 'heic', 'heif', 'tiff', 'tif', 'ico', 'pjpeg', 'pjp'].includes(ext);
     }
 
     estimateSize(file, options) {
@@ -661,7 +679,7 @@ class WasmImageCompressor extends BaseCompressor {
         let multiplier = quality * 0.65;
         if (targetFormat === 'image/jpeg') multiplier = quality * 0.85;
         else if (targetFormat === 'image/avif') multiplier = quality * 0.45;
-        else if (targetFormat === 'image/png') multiplier = 0.75;
+        else if (targetFormat === 'image/png') multiplier = 0.35 + (quality * 0.55);
         
         return Math.round(file.size * multiplier);
     }
@@ -736,7 +754,8 @@ class WasmImageCompressor extends BaseCompressor {
             } else if (targetFormat === 'image/png' || targetFormat === 'png') {
                 outExt = 'png';
                 outMime = 'image/png';
-                compressedBuffer = await encode(imageData);
+                const pngData = quality < 98 ? applyPngQuantization$1(imageData, quality) : imageData;
+                compressedBuffer = await encode(pngData);
             } else {
                 // Default to WebP
                 outExt = 'webp';
@@ -771,13 +790,31 @@ class WasmImageCompressor extends BaseCompressor {
     }
 }
 
+function applyPngQuantization(imageData, quality) {
+    if (quality >= 0.98) return imageData;
+    const data = imageData.data;
+    const len = data.length;
+    const levels = Math.max(4, Math.min(256, Math.round(256 * Math.pow(quality, 0.75))));
+    const step = 255 / (levels - 1);
+    const quantizedData = new Uint8ClampedArray(data);
+    for (let i = 0; i < len; i += 4) {
+        quantizedData[i] = Math.round(Math.round(quantizedData[i] / step) * step);
+        quantizedData[i + 1] = Math.round(Math.round(quantizedData[i + 1] / step) * step);
+        quantizedData[i + 2] = Math.round(Math.round(quantizedData[i + 2] / step) * step);
+        if (quantizedData[i + 3] < 255 && quantizedData[i + 3] > 0) {
+            quantizedData[i + 3] = Math.round(Math.round(quantizedData[i + 3] / step) * step);
+        }
+    }
+    return new ImageData(quantizedData, imageData.width, imageData.height);
+}
+
 class ImageCompressor extends BaseCompressor {
     canHandle(file) {
         if (file.type && file.type.startsWith('image/')) {
             return file.type !== 'image/svg+xml';
         }
         const ext = (file.name ? file.name.split('.').pop() : '').toLowerCase();
-        return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'jfif'].includes(ext);
+        return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'jfif', 'avif', 'heic', 'heif', 'tiff', 'tif', 'ico', 'pjpeg', 'pjp'].includes(ext);
     }
 
     estimateSize(file, options) {
@@ -813,9 +850,10 @@ class ImageCompressor extends BaseCompressor {
             ? options.targetFormat 
             : (options.mimeType || file.type || 'image/jpeg');
         
-        // Canvas convertToBlob doesn't support lossy quality for PNG
-        if (type === 'image/png' && (!options.targetFormat || options.targetFormat === 'auto')) {
-            type = 'image/jpeg';
+        if (type === 'image/png' && quality < 0.98) {
+            const imgData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+            const quantized = applyPngQuantization(imgData, quality);
+            ctx.putImageData(quantized, 0, 0);
         }
         
         const blob = await canvas.convertToBlob({ type, quality });
@@ -960,7 +998,7 @@ async function handleCompression(message) {
         });
 
     } catch (error) {
-        console.error('[UpForge Offscreen] Error during handleCompression:', error);
+        console.error('[urforge Offscreen] Error during handleCompression:', error);
         chrome.runtime.sendMessage({
             type: 'COMPRESSION_ERROR',
             tabId: message.tabId,

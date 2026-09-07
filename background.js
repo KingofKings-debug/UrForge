@@ -49,12 +49,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
           });
           if (res && res.ack) {
-            console.log('[UpForge SW] Message successfully acknowledged by offscreen.');
+            console.log('[urforge SW] Message successfully acknowledged by offscreen.');
             sendResponse({ ack: true });
             return;
           }
         } catch (e) {
-          console.warn('[UpForge SW] Offscreen not ready yet, retrying attempt:', attempt + 1);
+          console.warn('[urforge SW] Offscreen not ready yet, retrying attempt:', attempt + 1);
         }
         await new Promise(r => setTimeout(r, 100));
       }

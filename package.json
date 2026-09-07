@@ -1,5 +1,5 @@
 {
-  "name": "upforge",
+  "name": "urforge",
   "version": "1.0.0",
   "description": "",
   "main": "background.js",
@@ -9,16 +9,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KingofKings-debug/UpForge.git"
+    "url": "git+https://github.com/KingofKings-debug/urforge.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/KingofKings-debug/UpForge/issues"
+    "url": "https://github.com/KingofKings-debug/urforge/issues"
   },
-  "homepage": "https://github.com/KingofKings-debug/UpForge#readme",
+  "homepage": "https://github.com/KingofKings-debug/urforge#readme",
   "devDependencies": {
     "@jsquash/avif": "^2.1.1",
     "@jsquash/jpeg": "^1.6.0",

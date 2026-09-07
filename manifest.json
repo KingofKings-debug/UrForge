@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Universal File Upload Interceptor",
+  "name": "UpForge",
   "version": "1.0.0",
   "description": "Intercepts file uploads to customize quality and compress files.",
   "permissions": [
@@ -22,8 +22,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content-script.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content-script.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
@@ -33,8 +37,14 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["main-world.js", "wasm/*.wasm", "*.wasm"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "main-world.js",
+        "wasm/*.wasm",
+        "*.wasm"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

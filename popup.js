@@ -1,6 +1,28 @@
 document.addEventListener('DOMContentLoaded', () => {
+    initEngineSettings();
     renderList();
 });
+
+function initEngineSettings() {
+    const radios = document.querySelectorAll('input[name="popup-engine"]');
+    chrome.storage.sync.get(['defaultEngine'], (result) => {
+        const engine = result.defaultEngine || 'wasm';
+        const targetRadio = document.querySelector(`input[name="popup-engine"][value="${engine}"]`);
+        if (targetRadio) {
+            targetRadio.checked = true;
+        }
+    });
+
+    radios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                chrome.storage.sync.set({ defaultEngine: e.target.value }, () => {
+                    console.log('[urforge Popup] Default engine set to:', e.target.value);
+                });
+            }
+        });
+    });
+}
 
 function renderList() {
     const list = document.getElementById('exclusions-list');

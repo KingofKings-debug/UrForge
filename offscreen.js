@@ -106,7 +106,7 @@ async function handleCompression(message) {
         });
 
     } catch (error) {
-        console.error('[UpForge Offscreen] Error during handleCompression:', error);
+        console.error('[urforge Offscreen] Error during handleCompression:', error);
         chrome.runtime.sendMessage({
             type: 'COMPRESSION_ERROR',
             tabId: message.tabId,

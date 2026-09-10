@@ -147,21 +147,82 @@ try {
     console.warn('[urforge] Storage sync listener initialization error:', e);
 }
 
+// ─── Dialog-based Modal Show/Hide Helpers ───────────────────────────────────
+// Using <dialog>.showModal() places our UI in the browser's top layer,
+// which renders above ALL other content including website showModal() dialogs.
+function showUrforgeModal() {
+    if (!modalContainer || !overlay) return;
+    overlay.classList.remove('hidden');
+    if (!modalContainer.open) {
+        try {
+            modalContainer.showModal();
+        } catch (e) {
+            // Fallback if showModal fails (e.g. already open)
+            console.warn('[urforge] showModal fallback:', e);
+            modalContainer.setAttribute('open', '');
+        }
+    }
+}
+
+function hideUrforgeModal() {
+    if (!modalContainer || !overlay) return;
+    overlay.classList.add('hidden');
+    if (modalContainer.open) {
+        try {
+            modalContainer.close();
+        } catch (e) {
+            console.warn('[urforge] close fallback:', e);
+            modalContainer.removeAttribute('open');
+        }
+    }
+}
+
 // Updated initModal with UI components and event handling
 function initModal() {
     if (modalContainer) return;
 
-    // Create container
-    modalContainer = document.createElement('div');
+    // Create container using <dialog> so it enters the browser's top layer
+    // This guarantees our UI renders above ALL website content, including
+    // their own showModal() dialogs (e.g. Google NotebookLM upload popup).
+    modalContainer = document.createElement('dialog');
     Object.assign(modalContainer.style, {
         position: 'fixed',
         inset: '0',
+        width: '100vw',
+        height: '100vh',
+        maxWidth: '100vw',
+        maxHeight: '100vh',
+        padding: '0',
+        margin: '0',
+        border: 'none',
+        background: 'transparent',
         zIndex: '2147483647',
-        pointerEvents: 'none'
+        overflow: 'hidden'
     });
+    // Suppress the default ::backdrop of the <dialog> since we draw our own overlay
+    const dialogStyleTag = document.createElement('style');
+    dialogStyleTag.textContent = `dialog[data-urforge-dialog]::backdrop { background: transparent !important; }`;
+    document.head.appendChild(dialogStyleTag);
+    modalContainer.setAttribute('data-urforge-dialog', '');
     (document.body || document.documentElement).appendChild(modalContainer);
 
-    shadowRoot = modalContainer.attachShadow({ mode: 'closed' });
+    // Handle Escape key: <dialog> natively fires 'cancel' on Esc — sync our overlay state
+    modalContainer.addEventListener('cancel', (e) => {
+        e.preventDefault(); // prevent native close, we manage it ourselves
+        hideUrforgeModal();
+    });
+
+    // <dialog> doesn't support attachShadow, so nest a <div> inside it
+    const shadowHost = document.createElement('div');
+    Object.assign(shadowHost.style, {
+        position: 'fixed',
+        inset: '0',
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'auto'
+    });
+    modalContainer.appendChild(shadowHost);
+    shadowRoot = shadowHost.attachShadow({ mode: 'closed' });
 
     // Styles
     const style = document.createElement('style');
@@ -198,6 +259,7 @@ function initModal() {
             padding: 1.25rem;
             box-sizing: border-box;
             -webkit-font-smoothing: antialiased;
+            z-index: 2147483648; /* ensure overlay is above all site elements */
         }
         .modal {
             background: var(--surface-color);
@@ -735,8 +797,7 @@ function initModal() {
     // Close button handler
     shadowRoot.getElementById('close-modal').onclick = () => {
         console.log('[urforge] Close button clicked.');
-        overlay.classList.add('hidden');
-        modalContainer.style.pointerEvents = 'none';
+        hideUrforgeModal();
     };
 
     // Exclusions view handlers
@@ -773,7 +834,7 @@ function initModal() {
             domains.forEach((dom) => {
                 const item = document.createElement('div');
                 item.className = 'exclusion-item';
-                
+
                 const span = document.createElement('span');
                 span.className = 'exclusion-domain';
                 span.textContent = dom;
@@ -1043,7 +1104,7 @@ function handleFiles(files, callback, sourceInput) {
     const sizeMB = (currentFile.size / (1024 * 1024)).toFixed(2);
     const sizeKB = (currentFile.size / 1024).toFixed(1);
     const formattedSize = currentFile.size >= 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
-    
+
     const mimeLabel = currentFile.type ? (currentFile.type.split('/')[1] || currentFile.type).toUpperCase() : ext;
     const metaDetailsEl = shadowRoot.getElementById('file-meta-details');
     if (metaDetailsEl) {
@@ -1110,7 +1171,7 @@ function handleFiles(files, callback, sourceInput) {
     } else if (currentFile.type === 'application/pdf' || ext.toLowerCase() === 'pdf') {
         const pdfBlob = currentFile.type === 'application/pdf' ? currentFile : new Blob([currentFile], { type: 'application/pdf' });
         const url = URL.createObjectURL(pdfBlob);
-        
+
         const iframe = document.createElement('iframe');
         iframe.src = `${url}#toolbar=0&navpanes=0&view=FitH`;
         iframe.title = currentFile.name || 'PDF Preview';
@@ -1119,7 +1180,7 @@ function handleFiles(files, callback, sourceInput) {
         iframe.style.border = 'none';
         iframe.style.borderRadius = '10px';
         iframe.style.backgroundColor = '#161618';
-        
+
         preview.appendChild(iframe);
     } else {
         const div = document.createElement('div');
@@ -1201,7 +1262,7 @@ function handleFiles(files, callback, sourceInput) {
     const range = shadowRoot.getElementById('quality-range');
     const leftLabel = shadowRoot.getElementById('range-label-left');
     const rightLabel = shadowRoot.getElementById('range-label-right');
-    
+
     function updateEstimation() {
         const quality = parseInt(range.value, 10) / 100;
         const targetFormat = formatSelect ? formatSelect.value : 'image/webp';
@@ -1262,8 +1323,7 @@ function handleFiles(files, callback, sourceInput) {
     // Button actions
     shadowRoot.getElementById('btn-keep').onclick = async () => {
         console.log('[urforge] Keep Original clicked.');
-        overlay.classList.add('hidden');
-        modalContainer.style.pointerEvents = 'none';
+        hideUrforgeModal();
 
         // If the site restricts formats, ensure that incompatible formats (e.g. WebP/HEIC selected for JPEG-only site)
         // are converted to the site's required format so the upload succeeds.
@@ -1311,8 +1371,7 @@ function handleFiles(files, callback, sourceInput) {
         } catch (err) {
             console.error('[urforge] Error during domain exclusion:', err);
         }
-        overlay.classList.add('hidden');
-        modalContainer.style.pointerEvents = 'none';
+        hideUrforgeModal();
         callback(originalFiles);
     };
 
@@ -1337,24 +1396,24 @@ function handleFiles(files, callback, sourceInput) {
         }
 
         // ── Switch to progress view ──────────────────────────────────────────
-        const mainView     = shadowRoot.getElementById('main-view');
+        const mainView = shadowRoot.getElementById('main-view');
         const progressView = shadowRoot.getElementById('progress-view');
-        const progressPct  = shadowRoot.getElementById('progress-pct');
+        const progressPct = shadowRoot.getElementById('progress-pct');
         const progressFill = shadowRoot.getElementById('progress-fill');
         const progressLabel = shadowRoot.getElementById('progress-label');
-        const progressSub   = shadowRoot.getElementById('progress-sub');
+        const progressSub = shadowRoot.getElementById('progress-sub');
 
         mainView.classList.add('hidden');
         progressView.classList.remove('hidden');
-        modalContainer.style.pointerEvents = 'auto';
+        // dialog is already open via showModal(), no need to re-show
 
         // Smooth-animate the bar to an exact percentage
         function setProgress(pct, label, sub) {
             const rounded = Math.round(pct * 100);
-            progressPct.textContent  = `${rounded}%`;
+            progressPct.textContent = `${rounded}%`;
             progressFill.style.width = `${rounded}%`;
             if (label) progressLabel.textContent = label;
-            if (sub)   progressSub.textContent   = sub;
+            if (sub) progressSub.textContent = sub;
         }
 
         setProgress(0, 'Preparing file…', 'Reading file data for the compressor.');
@@ -1362,9 +1421,9 @@ function handleFiles(files, callback, sourceInput) {
         const processedFiles = [];
 
         for (let i = 0; i < files.length; i++) {
-            const file       = files[i];
-            const fileLabel  = files.length > 1 ? ` (${i + 1}/${files.length})` : '';
-            const isImage    = isImageFile(file);
+            const file = files[i];
+            const fileLabel = files.length > 1 ? ` (${i + 1}/${files.length})` : '';
+            const isImage = isImageFile(file);
 
             if (!isImage) {
                 // Non-image: passthrough with instant progress
@@ -1375,7 +1434,7 @@ function handleFiles(files, callback, sourceInput) {
 
             // Each file occupies an equal slice of 0–100%
             const sliceStart = i / files.length;
-            const sliceEnd   = (i + 1) / files.length;
+            const sliceEnd = (i + 1) / files.length;
 
             let compressed;
             try {
@@ -1385,16 +1444,16 @@ function handleFiles(files, callback, sourceInput) {
                     let label, sub;
                     if (rawProgress < 0.2) {
                         label = `Loading image${fileLabel}…`;
-                        sub   = `Decoding ${file.name}`;
+                        sub = `Decoding ${file.name}`;
                     } else if (rawProgress < 0.6) {
                         label = `Compressing (${selectedEngine.toUpperCase()})${fileLabel}…`;
-                        sub   = `Encoding to ${targetFormat.replace('image/', '').toUpperCase()} at ${range.value}% quality`;
+                        sub = `Encoding to ${targetFormat.replace('image/', '').toUpperCase()} at ${range.value}% quality`;
                     } else if (rawProgress < 1.0) {
                         label = `Finalising data${fileLabel}…`;
-                        sub   = `Writing output blob`;
+                        sub = `Writing output blob`;
                     } else {
                         label = `Done${fileLabel}!`;
-                        sub   = `Compressed to output image`;
+                        sub = `Compressed to output image`;
                     }
                     setProgress(overall, label, sub);
                 });
@@ -1419,8 +1478,7 @@ function handleFiles(files, callback, sourceInput) {
         setProgress(1, 'Done! Uploading…', 'Handing compressed file to the site.');
         await new Promise(r => setTimeout(r, 600));
 
-        overlay.classList.add('hidden');
-        modalContainer.style.pointerEvents = 'none';
+        hideUrforgeModal();
 
         // Reset for next time
         progressView.classList.add('hidden');
@@ -1432,8 +1490,7 @@ function handleFiles(files, callback, sourceInput) {
 
     // Show modal and activate click events on the container
     console.log('[urforge] Displaying modal.');
-    overlay.classList.remove('hidden');
-    modalContainer.style.pointerEvents = 'auto';
+    showUrforgeModal();
 }
 
 // 3. Domain Exclusion Check
@@ -1496,7 +1553,7 @@ function attachInput(input) {
 
 // Hook prototype click/showPicker in content script context as well
 const originalInputClick = HTMLInputElement.prototype.click;
-HTMLInputElement.prototype.click = function() {
+HTMLInputElement.prototype.click = function () {
     if (this.type === 'file') {
         attachInput(this);
         broadenFileInput(this);
@@ -1506,7 +1563,7 @@ HTMLInputElement.prototype.click = function() {
 
 if (HTMLInputElement.prototype.showPicker) {
     const originalInputShowPicker = HTMLInputElement.prototype.showPicker;
-    HTMLInputElement.prototype.showPicker = function() {
+    HTMLInputElement.prototype.showPicker = function () {
         if (this.type === 'file') {
             attachInput(this);
             broadenFileInput(this);
